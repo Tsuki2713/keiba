@@ -1,0 +1,853 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>競馬ゲーム</title>
+  <!-- Three.js (3D描画用) -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; font-family: 'Helvetica Neue', Arial, sans-serif; }
+    body { background-color: #121212; color: #fff; overflow-x: hidden; }
+
+    /* UIレイアウト */
+    .ui-layer {
+      position: absolute;
+      top: 0; left: 0; width: 100%; height: 100%;
+      pointer-events: none;
+      display: flex; flex-direction: column; justify-content: center; align-items: center;
+      z-index: 10;
+    }
+    .card {
+      background: rgba(20, 25, 35, 0.94);
+      border: 2px solid #e67e22;
+      border-radius: 16px;
+      padding: 20px;
+      width: 92%; max-width: 500px;
+      max-height: 90vh;
+      overflow-y: auto;
+      box-shadow: 0 10px 30px rgba(0,0,0,0.8);
+      pointer-events: auto;
+      text-align: center;
+      backdrop-filter: blur(8px);
+    }
+    h1 { color: #f39c12; font-size: 22px; margin-bottom: 12px; }
+    h2 { color: #3498db; font-size: 18px; margin-bottom: 10px; }
+
+    input, select, button {
+      width: 100%; padding: 12px; margin: 8px 0;
+      border-radius: 8px; border: none; font-size: 16px; font-weight: bold;
+    }
+    input, select { background: #2c3e50; color: #fff; border: 1px solid #455a64; }
+    button { background: linear-gradient(135deg, #e67e22, #d35400); color: white; cursor: pointer; transition: 0.2s; }
+    button:active { transform: scale(0.98); }
+
+    .status-box {
+      background: rgba(0,0,0,0.4); border-radius: 8px;
+      padding: 12px; margin: 10px 0; text-align: left; font-size: 13px; line-height: 1.5;
+    }
+
+    /* 上部ナビゲーションエリア (ボタン配置) */
+    .top-bar {
+      width: 100%; display: flex; justify-content: flex-end; gap: 8px; margin-bottom: 10px;
+    }
+    .top-btn {
+      width: auto; padding: 8px 14px; font-size: 13px; border-radius: 20px; margin: 0;
+    }
+    .info-btn-top { background: #3498db; }
+    .loan-btn-top { background: #e74c3c; }
+
+    /* ポップアップ（モーダル）設定 */
+    .modal-overlay {
+      position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+      background: rgba(0,0,0,0.7); display: flex; justify-content: center; align-items: center;
+      z-index: 20; pointer-events: auto;
+    }
+    .modal-card {
+      background: #2c3e50; border: 2px solid #e74c3c; border-radius: 12px;
+      padding: 20px; width: 90%; max-width: 480px; max-height: 85vh; overflow-y: auto; text-align: center;
+    }
+
+    .select-grid {
+      display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 8px; margin: 10px 0;
+    }
+    .select-grid select { font-size: 14px; padding: 8px; }
+
+    /* レース中の実況テロップ */
+    #live-hud {
+      position: absolute; top: 15px; width: 90%; max-width: 600px;
+      background: rgba(0,0,0,0.7); border-radius: 30px; padding: 10px 20px;
+      text-align: center; font-size: 18px; font-weight: bold; color: #f1c40f;
+      border: 1px solid #f1c40f; display: none; pointer-events: none; z-index: 5;
+    }
+
+    .history-row { display: flex; justify-content: space-between; padding: 4px 0; border-bottom: 1px solid #444; }
+
+    .hidden { display: none !important; }
+    #canvas-container { width: 100vw; height: 100vh; position: fixed; top: 0; left: 0; z-index: 1; }
+  </style>
+</head>
+<body>
+
+  <div id="canvas-container"></div>
+  <div id="live-hud">🏁 レーススタート！ 🏁</div>
+
+  <div class="ui-layer">
+    <!-- 1. 初期設定 -->
+    <div id="setup-screen" class="card">
+      <h1>3D回し競馬</h1>
+      <label style="font-size: 14px;">参加人数</label>
+      <input type="number" id="player-count" min="1" max="4" value="2">
+      <button onclick="initGame()">ゲーム開始</button>
+    </div>
+
+    <!-- 2. ベット画面 -->
+    <div id="bet-screen" class="card hidden">
+      <!-- 画面上部ボタンエリア -->
+      <div class="top-bar">
+        <button class="top-btn info-btn-top" onclick="openHorseInfoModal()">馬の特徴・倍率</button>
+        <button class="top-btn loan-btn-top" onclick="openLoanModal()">お金を貸す</button>
+      </div>
+
+      <h2 id="round-title">第 1 レース</h2>
+      <div style="font-size: 18px; color: #f1c40f; margin: 5px 0;">
+        📱 <span id="current-player-name"></span> の番です
+      </div>
+      <div class="status-box" id="player-info"></div>
+
+      <p style="font-size: 14px; text-align: left; font-weight: bold; margin-top:10px;">【予想】チャンス馬を選択（1〜3頭選択可）：</p>
+      <div class="select-grid">
+        <div>
+          <label style="font-size: 12px; color: #f1c40f;">馬 A</label>
+          <select id="first-select"></select>
+        </div>
+        <div>
+          <label style="font-size: 12px; color: #f1c40f;">馬 B</label>
+          <select id="second-select"></select>
+        </div>
+        <div>
+          <label style="font-size: 12px; color: #f1c40f;">馬 C</label>
+          <select id="third-select"></select>
+        </div>
+      </div>
+
+      <p style="font-size: 14px; text-align: left;">賭け金 (単位: t)：</p>
+      <input type="number" id="bet-amount" min="0" value="10">
+
+      <button onclick="submitBet()">予想を決定して次へ</button>
+    </div>
+
+    <!-- 3. 各レース結果画面 -->
+    <div id="result-screen" class="card hidden">
+      <h2>🏆 確定着順 (上位3頭) 🏆</h2>
+      <div id="winner-text" style="font-size: 18px; font-weight: bold; color: #2ecc71; margin: 10px 0;"></div>
+      <div class="status-box" id="payout-info"></div>
+      <h3>現在のランキング</h3>
+      <div class="status-box" id="standings-info"></div>
+      <button id="next-btn" onclick="nextRound()">次のレースへ</button>
+    </div>
+
+    <!-- 4. 最終決算＆推移グラフ画面 -->
+    <div id="final-screen" class="card hidden">
+      <h2>👑 最終結果発表 👑</h2>
+      <div class="status-box" id="loan-settlement-info" style="border:1px solid #f1c40f;"></div>
+      
+      <h3>🏆 最終順位 🏆</h3>
+      <div class="status-box" id="final-rankings"></div>
+
+      <h3>📈 所持金(t)の推移 📈</h3>
+      <div class="status-box" id="history-graph"></div>
+
+      <button onclick="location.reload()">もう一度あそぶ</button>
+    </div>
+  </div>
+
+  <!-- 馬の特徴・倍率ポップアップモーダル -->
+  <div id="horse-info-modal" class="modal-overlay hidden">
+    <div class="modal-card" style="border-color:#3498db;">
+      <h3 style="color:#3498db; margin-bottom:8px;">🐎 馬の特徴＆予想倍率</h3>
+      
+      <!-- 予想形式ごとの基本倍率 -->
+      <div class="status-box" style="background:rgba(52, 152, 219, 0.15); border:1px solid #3498db; font-size:11px; margin-bottom:10px;">
+        <strong style="color:#f1c40f;">【配当倍率ルール】</strong><br>
+        ・<strong style="color:#2ecc71;">1頭予想</strong>: 選んだ馬ごとの固有オッズ（下表参照）<br>
+        ・<strong>2頭予想</strong>: 2頭とも着内:<b>6倍</b> / 1頭着内:<b>2倍</b><br>
+        ・<strong>3頭予想</strong>: 完全着順一致:<b>36倍</b> / 3頭着内:<b>12倍</b> / 2頭:<b>4倍</b> / 1頭:<b>1.5倍</b>
+      </div>
+
+      <div id="horse-info-list" class="status-box" style="font-size:12px; line-height:1.6;"></div>
+      <button onclick="closeHorseInfoModal()" style="background:#3498db; margin-top:8px;">閉じる</button>
+    </div>
+  </div>
+
+  <!-- 融資用ポップアップモーダル -->
+  <div id="loan-modal" class="modal-overlay hidden">
+    <div class="modal-card">
+      <h3 style="color:#e74c3c; margin-bottom:10px;">破産者への融資</h3>
+      <div id="modal-content">
+        <p style="font-size:12px; margin-bottom:10px;">レース結果で所持金が 0t になったプレイヤーにお金を貸せます（最終結果で1.1倍返済）</p>
+        <p style="font-size:12px; color:#f1c40f; margin-bottom:5px;">操作中: <span id="lender-name-display"></span></p>
+        <select id="loan-target-select"></select>
+        <input type="number" id="loan-amount" placeholder="貸す金額 (t)" min="1">
+        <button onclick="execLoan()" style="background:#27ae60; margin-top:8px;">融資を実行する</button>
+      </div>
+      <button onclick="closeLoanModal()" style="background:#7f8c8d; margin-top:8px;">閉じる</button>
+    </div>
+  </div>
+
+  <script>
+    // winOdds: 1頭予想時に適用される個別の配当倍率（強さに応じて設定）
+    const HORSES_DATA = [
+      { id: 1, num: 1, name: "【1番】レッドフェニックス", color: 0xe74c3c, style: "逃げ馬", stamina: 0.8, winOdds: 8.5, desc: "序盤から飛ばすがスタミナ消費が早い。後半のバテに注意。" },
+      { id: 2, num: 2, name: "【2番】ブルーインパクト", color: 0x3498db, style: "差し馬", stamina: 1.0, winOdds: 4.2, desc: "中盤まで温存し、後半の直線で鋭いスパートをかける。" },
+      { id: 3, num: 3, name: "【3番】グリーンマッハ", color: 0x2ecc71, style: "安定型", stamina: 1.1, winOdds: 2.8, desc: "大きなムラがなく、終盤までスタミナを維持できる堅実派。" },
+      { id: 4, num: 4, name: "【4番】イエローミラクル", color: 0xf1c40f, style: "一発型", stamina: 0.9, winOdds: 11.0, desc: "爆発的なスパートを秘めているが、スタミナ切れで失速することも。" },
+      { id: 5, num: 5, name: "【5番】パープルナイト", color: 0x9b59b6, style: "追い込み", stamina: 1.0, winOdds: 5.5, desc: "序盤は後方に控え、ゴール直前で凄まじい末脚を見せる。" },
+      { id: 6, num: 6, name: "【6番】オレンジファイヤー", color: 0xe67e22, style: "先行馬", stamina: 1.0, winOdds: 3.8, desc: "好位置をキープし、早めのスパートで逃げ馬を捉える。" },
+      { id: 7, num: 7, name: "【7番】ピンクチェリー", color: 0xff69b4, style: "気分屋", stamina: 0.9, winOdds: 15.0, desc: "レースごとにスタミナ消費がガラリと変わる大穴候補。" },
+      { id: 8, num: 8, name: "【8番】ブラックシャドウ", color: 0x2c3e50, style: "スタミナ型", stamina: 1.4, winOdds: 1.8, desc: "圧倒的なスタミナを誇り、全レース後半でもバテずに伸び続ける。" }
+    ];
+
+    let players = [];
+    let currentPlayerIndex = 0;
+    let currentRound = 1;
+    const maxRounds = 5;
+    let bets = [];
+    let isRacing = false;
+    let finishedHorses = [];
+
+    let loans = [];
+    let assetHistory = [];
+
+    // --- Three.js 変数 ---
+    let scene, camera, renderer;
+    let horseMeshes = [];
+    let horseProgress = [];
+    let horseBaseSpeeds = [];
+    let horseBoosts = [];
+    let legAngles = [];
+
+    const RADIUS_X = 60;
+    const RADIUS_Z = 30;
+    const TOTAL_LAPS = 1.75; // 長距離設定
+
+    window.onload = () => {
+      init3D();
+      animate();
+    };
+
+    function init3D() {
+      const container = document.getElementById('canvas-container');
+      scene = new THREE.Scene();
+      scene.background = new THREE.Color(0x87ceeb);
+      scene.fog = new THREE.FogExp2(0x87ceeb, 0.004);
+
+      camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 0.1, 1000);
+      renderer = new THREE.WebGLRenderer({ antialias: true });
+      renderer.setSize(window.innerWidth, window.innerHeight);
+      renderer.shadowMap.enabled = true;
+      container.appendChild(renderer.domElement);
+
+      const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
+      scene.add(ambientLight);
+
+      const dirLight = new THREE.DirectionalLight(0xffffff, 0.8);
+      dirLight.position.set(50, 100, 50);
+      dirLight.castShadow = true;
+      scene.add(dirLight);
+
+      const groundGeo = new THREE.PlaneGeometry(300, 300);
+      const groundMat = new THREE.MeshLambertMaterial({ color: 0x27ae60 });
+      const ground = new THREE.Mesh(groundGeo, groundMat);
+      ground.rotation.x = -Math.PI / 2;
+      ground.receiveShadow = true;
+      scene.add(ground);
+
+      createTrack();
+      createHorses();
+
+      window.addEventListener('resize', onWindowResize);
+    }
+
+    function createTrack() {
+      const trackShape = new THREE.Shape();
+      trackShape.absellipse(0, 0, RADIUS_X + 12, RADIUS_Z + 12, 0, Math.PI * 2, false, 0);
+
+      const holePath = new THREE.Path();
+      holePath.absellipse(0, 0, RADIUS_X - 12, RADIUS_Z - 12, 0, Math.PI * 2, true, 0);
+      trackShape.holes.push(holePath);
+
+      const geometry = new THREE.ShapeGeometry(trackShape);
+      const material = new THREE.MeshLambertMaterial({ color: 0xd35400, side: THREE.DoubleSide });
+      const trackMesh = new THREE.Mesh(geometry, material);
+      trackMesh.rotation.x = -Math.PI / 2;
+      trackMesh.position.y = 0.01;
+      scene.add(trackMesh);
+
+      const gateMat = new THREE.MeshBasicMaterial({ color: 0xffffff });
+      const gateGeo = new THREE.BoxGeometry(1, 10, 24);
+      const gate = new THREE.Mesh(gateGeo, gateMat);
+      const pos = getCoursePosition(TOTAL_LAPS * Math.PI * 2, 0);
+      gate.position.set(pos.x, 5, pos.z);
+      scene.add(gate);
+    }
+
+    function createNumberTexture(numberText) {
+      const canvas = document.createElement('canvas');
+      canvas.width = 128; canvas.height = 128;
+      const ctx = canvas.getContext('2d');
+      ctx.fillStyle = '#ffffff';
+      ctx.fillRect(0, 0, 128, 128);
+      ctx.fillStyle = '#000000';
+      ctx.font = 'bold 90px sans-serif';
+      ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+      ctx.fillText(numberText, 64, 64);
+      return new THREE.CanvasTexture(canvas);
+    }
+
+    function createHorses() {
+      HORSES_DATA.forEach((h) => {
+        const group = new THREE.Group();
+
+        const bodyGeo = new THREE.BoxGeometry(1.2, 1.2, 2.5);
+        const bodyMat = new THREE.MeshLambertMaterial({ color: h.color });
+        const body = new THREE.Mesh(bodyGeo, bodyMat);
+        body.position.y = 1.8;
+        body.castShadow = true;
+        group.add(body);
+
+        const numTexture = createNumberTexture(h.num.toString());
+        const bibMat = new THREE.MeshBasicMaterial({ map: numTexture });
+        const bibGeo = new THREE.PlaneGeometry(0.9, 0.9);
+
+        const bibLeft = new THREE.Mesh(bibGeo, bibMat);
+        bibLeft.position.set(-0.61, 1.8, 0);
+        bibLeft.rotation.y = -Math.PI / 2;
+        group.add(bibLeft);
+
+        const bibRight = new THREE.Mesh(bibGeo, bibMat);
+        bibRight.position.set(0.61, 1.8, 0);
+        bibRight.rotation.y = Math.PI / 2;
+        group.add(bibRight);
+
+        const headGeo = new THREE.BoxGeometry(0.8, 0.8, 1.2);
+        const head = new THREE.Mesh(headGeo, bodyMat);
+        head.position.set(0, 2.6, 1.2);
+        head.castShadow = true;
+        group.add(head);
+
+        const legGeo = new THREE.BoxGeometry(0.3, 1.2, 0.3);
+        const legs = [];
+        const offsets = [
+          [-0.5, 0.6, 0.8], [0.5, 0.6, 0.8],
+          [-0.5, 0.6, -0.8], [0.5, 0.6, -0.8]
+        ];
+
+        offsets.forEach(off => {
+          const leg = new THREE.Mesh(legGeo, bodyMat);
+          leg.position.set(...off);
+          leg.castShadow = true;
+          group.add(leg);
+          legs.push(leg);
+        });
+
+        group.userData = { legs: legs, id: h.id };
+        scene.add(group);
+        horseMeshes.push(group);
+      });
+      resetHorsePositions();
+    }
+
+    function getCoursePosition(angle, laneOffset) {
+      const rx = RADIUS_X + laneOffset;
+      const rz = RADIUS_Z + laneOffset;
+      return {
+        x: Math.cos(angle) * rx,
+        z: Math.sin(angle) * rz
+      };
+    }
+
+    function resetHorsePositions() {
+      horseProgress = new Array(8).fill(0);
+      legAngles = new Array(8).fill(0);
+      finishedHorses = [];
+
+      HORSES_DATA.forEach((_, i) => {
+        const laneOffset = (i - 3.5) * 2.6;
+        const pos = getCoursePosition(0, laneOffset);
+        horseMeshes[i].position.set(pos.x, 0, pos.z);
+        horseMeshes[i].rotation.y = -Math.PI / 2;
+      });
+      camera.position.set(RADIUS_X + 15, 25, 35);
+      camera.lookAt(RADIUS_X, 0, 0);
+    }
+
+    // --- ゲーム設定 ---
+    function initGame() {
+      const count = parseInt(document.getElementById('player-count').value);
+      players = [];
+      loans = [];
+      assetHistory = [];
+
+      for(let i = 1; i <= count; i++) {
+        players.push({ id: i, name: `プレイヤー${i}`, tokens: 100 });
+      }
+
+      recordHistory(0);
+      document.getElementById('setup-screen').classList.add('hidden');
+      startBettingPhase();
+    }
+
+    function recordHistory(roundNum) {
+      const snap = { round: roundNum, tokens: {} };
+      players.forEach(p => snap.tokens[p.id] = p.tokens);
+      assetHistory.push(snap);
+    }
+
+    function startBettingPhase() {
+      bets = [];
+      currentPlayerIndex = 0;
+      resetHorsePositions();
+      updateBetScreen();
+      document.getElementById('bet-screen').classList.remove('hidden');
+    }
+
+    function populateSelects() {
+      const s1 = document.getElementById('first-select');
+      const s2 = document.getElementById('second-select');
+      const s3 = document.getElementById('third-select');
+      
+      [s1, s2, s3].forEach(s => s.innerHTML = '<option value="0">なし</option>');
+
+      HORSES_DATA.forEach((h, idx) => {
+        s1.innerHTML += `<option value="${h.id}" ${idx===0?'selected':''}>${h.num}番 (${h.winOdds}倍)</option>`;
+        s2.innerHTML += `<option value="${h.id}" ${idx===1?'selected':''}>${h.num}番 (${h.winOdds}倍)</option>`;
+        s3.innerHTML += `<option value="${h.id}" ${idx===2?'selected':''}>${h.num}番 (${h.winOdds}倍)</option>`;
+      });
+    }
+
+    function updateBetScreen() {
+      const p = players[currentPlayerIndex];
+      document.getElementById('round-title').innerText = `第 ${currentRound} / ${maxRounds} レース`;
+      document.getElementById('current-player-name').innerText = p.name;
+
+      let infoHtml = `<strong>現在の所持金:</strong> ${p.tokens} t<br>`;
+      if (p.tokens === 0) {
+        infoHtml += `<span style="color:#e74c3c; font-weight:bold;">※破産状態です (0tで進めるか、上のボタンから融資を受けられます)</span><br>`;
+      }
+      infoHtml += `<strong>出走馬一覧（1頭予想時の倍率）:</strong><br>`;
+      HORSES_DATA.forEach(h => {
+        infoHtml += `${h.name} <span style="color:#f1c40f;">【${h.style}】</span> 単勝:<b>${h.winOdds}倍</b><br>`;
+      });
+      document.getElementById('player-info').innerHTML = infoHtml;
+
+      populateSelects();
+
+      const betInput = document.getElementById('bet-amount');
+      betInput.max = p.tokens;
+      betInput.value = p.tokens > 0 ? Math.min(10, p.tokens) : 0;
+    }
+
+    // 馬の特徴・オッズモーダル制御
+    function openHorseInfoModal() {
+      let infoHtml = '';
+      HORSES_DATA.forEach(h => {
+        infoHtml += `<div style="margin-bottom:10px; border-bottom:1px solid #444; padding-bottom:6px;">`;
+        infoHtml += `<div style="display:flex; justify-content:space-between; align-items:center;">`;
+        infoHtml += `<strong style="color:#f1c40f;">${h.name}</strong>`;
+        infoHtml += `<span style="font-size:12px; color:#2ecc71; background:rgba(46,204,113,0.15); padding:2px 8px; border-radius:4px; font-weight:bold;">1頭予想時: ${h.winOdds}倍</span>`;
+        infoHtml += `</div>`;
+        infoHtml += `<div style="color:#3498db; font-size:11px; margin:2px 0;">脚質: ${h.style}</div>`;
+        infoHtml += `<span style="color:#ddd; font-size:11px;">${h.desc}</span>`;
+        infoHtml += `</div>`;
+      });
+      document.getElementById('horse-info-list').innerHTML = infoHtml;
+      document.getElementById('horse-info-modal').classList.remove('hidden');
+    }
+
+    function closeHorseInfoModal() {
+      document.getElementById('horse-info-modal').classList.add('hidden');
+    }
+
+    // モーダルを開く（融資機能）
+    function openLoanModal() {
+      const activePlayer = players[currentPlayerIndex];
+      const zeroPlayers = players.filter(p => p.tokens === 0);
+      const wealthyPlayers = players.filter(p => p.tokens > 0);
+
+      if (zeroPlayers.length === 0) {
+        alert("現在、所持金が 0t の破産プレイヤーはいません！");
+        return;
+      }
+
+      if (wealthyPlayers.length === 0) {
+        alert("全員が破産しているため融資を行えません！");
+        return;
+      }
+
+      const targetSel = document.getElementById('loan-target-select');
+      targetSel.innerHTML = '';
+
+      if (activePlayer.tokens === 0) {
+        document.getElementById('lender-name-display').innerText = `${activePlayer.name} (借り手)`;
+        wealthyPlayers.forEach(wp => {
+          targetSel.innerHTML += `<option value="${wp.id}">${wp.name} から借りる (所持: ${wp.tokens}t)</option>`;
+        });
+      } else {
+        document.getElementById('lender-name-display').innerText = `${activePlayer.name} (貸し手)`;
+        zeroPlayers.forEach(zp => {
+          targetSel.innerHTML += `<option value="${zp.id}">${zp.name} に貸す (所持: 0t)</option>`;
+        });
+      }
+
+      document.getElementById('loan-amount').value = '';
+      document.getElementById('loan-modal').classList.remove('hidden');
+    }
+
+    function closeLoanModal() {
+      document.getElementById('loan-modal').classList.add('hidden');
+    }
+
+    // 融資の実行
+    function execLoan() {
+      const activePlayer = players[currentPlayerIndex];
+      const targetId = parseInt(document.getElementById('loan-target-select').value);
+      const targetPlayer = players.find(p => p.id === targetId);
+      const amount = parseInt(document.getElementById('loan-amount').value);
+
+      let lender, borrower;
+      if (activePlayer.tokens === 0) {
+        lender = targetPlayer;
+        borrower = activePlayer;
+      } else {
+        lender = activePlayer;
+        borrower = targetPlayer;
+      }
+
+      if (isNaN(amount) || amount <= 0) {
+        alert("1t 以上の有効な金額を入力してください！");
+        return;
+      }
+
+      if (amount > lender.tokens) {
+        alert(`${lender.name} の所持金(${lender.tokens}t)を超えて貸し出すことはできません！`);
+        return;
+      }
+
+      lender.tokens -= amount;
+      borrower.tokens += amount;
+
+      loans.push({ lenderId: lender.id, borrowerId: borrower.id, amount: amount });
+
+      alert(`${lender.name} が ${borrower.name} に ${amount}t 貸しました！（最終決算で1.1倍返済）`);
+      closeLoanModal();
+      updateBetScreen();
+    }
+
+    function submitBet() {
+      const p = players[currentPlayerIndex];
+      const h1 = parseInt(document.getElementById('first-select').value);
+      const h2 = parseInt(document.getElementById('second-select').value);
+      const h3 = parseInt(document.getElementById('third-select').value);
+      const amount = parseInt(document.getElementById('bet-amount').value);
+
+      const selectedHorses = [h1, h2, h3].filter(id => id > 0);
+
+      const uniqueHorses = new Set(selectedHorses);
+      if (selectedHorses.length !== uniqueHorses.size) {
+        alert("同じ馬を重複して選択することはできません！");
+        return;
+      }
+
+      if (isNaN(amount) || amount < 0 || amount > p.tokens) {
+        alert("有効な賭け金を入力してください！");
+        return;
+      }
+
+      if (selectedHorses.length === 0 && amount > 0) {
+        alert("馬を1頭も選択していない場合は、賭け金を 0t にしてください。");
+        return;
+      }
+
+      bets.push({ playerId: p.id, trio: selectedHorses, amount: amount });
+
+      currentPlayerIndex++;
+      if(currentPlayerIndex < players.length) {
+        updateBetScreen();
+      } else {
+        document.getElementById('bet-screen').classList.add('hidden');
+        startRace();
+      }
+    }
+
+    function startRace() {
+      isRacing = true;
+      finishedHorses = [];
+      document.getElementById('live-hud').style.display = 'block';
+      document.getElementById('live-hud').innerText = "🏁 レーススタート！！ 🏁";
+
+      horseProgress = new Array(8).fill(0);
+
+      // 馬のスタイルに応じたベーススピード
+      horseBaseSpeeds = HORSES_DATA.map(h => {
+        if (h.id === 1) return 0.0031; // 逃げ: 序盤早い
+        if (h.id === 5) return 0.0019; // 追い込み: 序盤遅い
+        if (h.id === 7) return 0.0016 + Math.random() * 0.0018; // 気分屋
+        return 0.0023 + Math.random() * 0.0005;
+      });
+
+      // 馬のスタイルに応じたスパート設定
+      horseBoosts = HORSES_DATA.map(h => {
+        if (h.id === 1) return { boostPoint: Math.PI * 0.8, power: 0.0002 }; // 逃げ
+        if (h.id === 2) return { boostPoint: Math.PI * 2.2, power: 0.0016 }; // 差し
+        if (h.id === 4) return { boostPoint: Math.PI * 2.4, power: Math.random() > 0.4 ? 0.0026 : 0.0001 }; // 一発屋
+        if (h.id === 5) return { boostPoint: Math.PI * 2.6, power: 0.0025 }; // 追い込み
+        if (h.id === 8) return { boostPoint: Math.PI * 1.5, power: 0.0013 }; // スタミナ型（早めのスパートでもバテない）
+        return { boostPoint: Math.PI * 2.0 + Math.random() * Math.PI * 0.5, power: 0.0010 + Math.random() * 0.0008 };
+      });
+    }
+
+    // --- メインループ ---
+    function animate() {
+      requestAnimationFrame(animate);
+
+      if (isRacing) {
+        const targetAngle = TOTAL_LAPS * Math.PI * 2;
+
+        HORSES_DATA.forEach((h, i) => {
+          if (!finishedHorses.includes(h.id)) {
+            let speed = horseBaseSpeeds[i] + (Math.random() - 0.48) * 0.0005;
+
+            // スパート加速
+            if (horseProgress[i] > horseBoosts[i].boostPoint) {
+              speed += horseBoosts[i].power;
+            }
+
+            // スタミナ判定
+            if (horseProgress[i] > Math.PI * 2) {
+              const staminaFactor = h.stamina; 
+              if (staminaFactor < 1.0) {
+                speed *= staminaFactor; // スタミナ不足で減速
+              } else if (staminaFactor > 1.2) {
+                speed *= 1.05; // スタミナ豊富で後半伸びる
+              }
+            }
+
+            horseProgress[i] += Math.max(0.0008, speed);
+
+            legAngles[i] += speed * 50;
+            const legs = horseMeshes[i].userData.legs;
+            legs[0].rotation.x = Math.sin(legAngles[i]) * 0.6;
+            legs[1].rotation.x = -Math.sin(legAngles[i]) * 0.6;
+            legs[2].rotation.x = -Math.sin(legAngles[i]) * 0.6;
+            legs[3].rotation.x = Math.sin(legAngles[i]) * 0.6;
+
+            if (horseProgress[i] >= targetAngle) {
+              finishedHorses.push(h.id);
+            }
+          }
+
+          const laneOffset = (i - 3.5) * 2.6;
+          const pos = getCoursePosition(horseProgress[i], laneOffset);
+          horseMeshes[i].position.set(pos.x, 0, pos.z);
+
+          const nextPos = getCoursePosition(horseProgress[i] + 0.01, laneOffset);
+          horseMeshes[i].lookAt(nextPos.x, 0, nextPos.z);
+        });
+
+        let activeLeaderIndex = 0;
+        let maxProg = -1;
+        HORSES_DATA.forEach((h, i) => {
+          if (!finishedHorses.includes(h.id) && horseProgress[i] > maxProg) {
+            maxProg = horseProgress[i];
+            activeLeaderIndex = i;
+          }
+        });
+
+        if (maxProg === -1) {
+          activeLeaderIndex = HORSES_DATA.findIndex(h => h.id === finishedHorses[0]);
+        }
+
+        const leaderPos = horseMeshes[activeLeaderIndex].position;
+        const prog = horseProgress[activeLeaderIndex];
+        const camTargetX = leaderPos.x + Math.cos(prog) * 20;
+        const camTargetZ = leaderPos.z + Math.sin(prog) * 20;
+
+        camera.position.x += (camTargetX - camera.position.x) * 0.05;
+        camera.position.z += (camTargetZ - camera.position.z) * 0.05;
+        camera.position.y += (18 - camera.position.y) * 0.05;
+        camera.lookAt(leaderPos.x, 2, leaderPos.z);
+
+        if (finishedHorses.length === 1) {
+          const h1 = HORSES_DATA.find(h => h.id === finishedHorses[0]);
+          document.getElementById('live-hud').innerText = `🥇 1着: 【${h1.num}番】！2着・3着争い！`;
+        } else if (finishedHorses.length === 2) {
+          const h2 = HORSES_DATA.find(h => h.id === finishedHorses[1]);
+          document.getElementById('live-hud').innerText = `🥈 2着: 【${h2.num}番】！3着争いはどうか！？`;
+        }
+
+        if (finishedHorses.length >= 3) {
+          isRacing = false;
+          const h1 = HORSES_DATA.find(h => h.id === finishedHorses[0]);
+          const h2 = HORSES_DATA.find(h => h.id === finishedHorses[1]);
+          const h3 = HORSES_DATA.find(h => h.id === finishedHorses[2]);
+          
+          document.getElementById('live-hud').innerText = `🏁 3着決定！【1着:${h1.num}番 / 2着:${h2.num}番 / 3着:${h3.num}番】 🏁`;
+          setTimeout(() => showResults(finishedHorses.slice(0, 3)), 2500);
+        }
+      }
+
+      renderer.render(scene, camera);
+    }
+
+    function showResults(top3Ids) {
+      document.getElementById('live-hud').style.display = 'none';
+      document.getElementById('result-screen').classList.remove('hidden');
+
+      const h1 = HORSES_DATA.find(h => h.id === top3Ids[0]);
+      const h2 = HORSES_DATA.find(h => h.id === top3Ids[1]);
+      const h3 = HORSES_DATA.find(h => h.id === top3Ids[2]);
+
+      document.getElementById('winner-text').innerHTML = `
+        🥇1着: ${h1.name}<br>
+        🥈2着: ${h2.name}<br>
+        🥉3着: ${h3.name}
+      `;
+
+      let payoutHtml = `<div style="color:#f1c40f; font-weight:bold; margin-bottom:8px;">【獲得倍率ルール】<br>1頭予想: 選んだ馬の倍率通り<br>2頭予想: 2頭 6倍 / 1頭 2倍<br>3頭予想: 完全一致 36倍 / 3頭 12倍 / 2頭 4倍 / 1頭 1.5倍</div>`;
+      
+      players.forEach(p => {
+        const b = bets.find(item => item.playerId === p.id);
+        
+        if (!b || b.trio.length === 0 || b.amount === 0) {
+          payoutHtml += `<strong>${p.name}</strong>: 予想なし (所持金: ${p.tokens} t)<br>`;
+          return;
+        }
+
+        p.tokens -= b.amount;
+
+        const selCount = b.trio.length;
+        const hitCount = b.trio.filter(id => top3Ids.includes(id)).length;
+        const isExact = selCount === 3 && b.trio[0] === top3Ids[0] && b.trio[1] === top3Ids[1] && b.trio[2] === top3Ids[2];
+
+        let multiplier = 0;
+        let resultMsg = "";
+
+        if (selCount === 1) {
+          if (hitCount === 1) {
+            // 1頭予想の時のみ、選択した馬の固有オッズ（倍率）をそのまま使用
+            const pickedHorse = HORSES_DATA.find(h => h.id === b.trio[0]);
+            multiplier = pickedHorse.winOdds;
+            resultMsg = `1頭予想 的中！[${pickedHorse.winOdds}倍]`;
+          }
+        } 
+        else if (selCount === 2) {
+          if (hitCount === 2) {
+            multiplier = 6;
+            resultMsg = "2頭予想 2頭とも的中！";
+          } else if (hitCount === 1) {
+            multiplier = 2;
+            resultMsg = "2頭予想 1頭的中！";
+          }
+        } 
+        else if (selCount === 3) {
+          if (isExact) {
+            multiplier = 36;
+            resultMsg = "3頭予想 着順完全一致！";
+          } else if (hitCount === 3) {
+            multiplier = 12;
+            resultMsg = "3頭予想 3頭すべて上位！";
+          } else if (hitCount === 2) {
+            multiplier = 4;
+            resultMsg = "3頭予想 2頭が上位入り！";
+          } else if (hitCount === 1) {
+            multiplier = 1.5;
+            resultMsg = "3頭予想 1頭が上位入り！";
+          }
+        }
+
+        if (multiplier > 0) {
+          const winAmount = Math.floor(b.amount * multiplier);
+          p.tokens += winAmount;
+          payoutHtml += `<strong style="color:#2ecc71;">${p.name}</strong>: ${resultMsg} (+${winAmount - b.amount} t) 🎉 [残: ${p.tokens}t]<br>`;
+        } else {
+          const isBankrupt = p.tokens === 0 ? " <span style='color:#e74c3c; font-weight:bold;'>【破産!】</span>" : "";
+          payoutHtml += `<strong>${p.name}</strong>: 不的中 (-${b.amount} t) [残: ${p.tokens}t]${isBankrupt}<br>`;
+        }
+      });
+
+      document.getElementById('payout-info').innerHTML = payoutHtml;
+
+      recordHistory(currentRound);
+
+      let standingsHtml = '';
+      const sorted = [...players].sort((a,b) => b.tokens - a.tokens);
+      sorted.forEach((p, idx) => {
+        standingsHtml += `${idx+1}位: ${p.name} — ${p.tokens} t<br>`;
+      });
+      document.getElementById('standings-info').innerHTML = standingsHtml;
+
+      if(currentRound >= maxRounds) {
+        document.getElementById('next-btn').innerText = "最終結果（決算＆成績表へ）";
+        document.getElementById('next-btn').onclick = showFinalScreen;
+      }
+    }
+
+    function showFinalScreen() {
+      document.getElementById('result-screen').classList.add('hidden');
+      document.getElementById('final-screen').classList.remove('hidden');
+
+      let loanText = "<strong>【借金返済＆利息清算 (1.1倍)】</strong><br>";
+      if (loans.length === 0) {
+        loanText += "融資のやり取りはありませんでした。<br>";
+      } else {
+        loans.forEach(l => {
+          const lender = players.find(p => p.id === l.lenderId);
+          const borrower = players.find(p => p.id === l.borrowerId);
+          const repayAmount = Math.floor(l.amount * 1.1);
+
+          const actualPaid = Math.min(borrower.tokens, repayAmount);
+          borrower.tokens -= actualPaid;
+          lender.tokens += actualPaid;
+
+          loanText += `${borrower.name} ➔ ${lender.name} へ 返済 ${actualPaid}t (元金 ${l.amount}t + 利息10%)<br>`;
+        });
+      }
+      document.getElementById('loan-settlement-info').innerHTML = loanText;
+
+      let finalRankHtml = '';
+      const sorted = [...players].sort((a,b) => b.tokens - a.tokens);
+      sorted.forEach((p, idx) => {
+        const medal = idx === 0 ? "🥇" : idx === 1 ? "🥈" : idx === 2 ? "🥉" : " ";
+        finalRankHtml += `<strong>${medal} ${idx+1}位: ${p.name} — ${p.tokens} t</strong><br>`;
+      });
+      document.getElementById('final-rankings').innerHTML = finalRankHtml;
+
+      let historyHtml = '';
+      assetHistory.forEach(h => {
+        const label = h.round === 0 ? "スタート時" : `第 ${h.round} レース後`;
+        historyHtml += `<div style="font-weight:bold; color:#f1c40f; margin-top:6px;">${label}</div>`;
+        players.forEach(p => {
+          const val = h.tokens[p.id];
+          const barLen = Math.min(20, Math.floor(val / 10));
+          const barStr = "■".repeat(barLen);
+          historyHtml += `<div class="history-row"><span>${p.name}: ${val}t</span><span style="color:#2ecc71;">${barStr}</span></div>`;
+        });
+      });
+      document.getElementById('history-graph').innerHTML = historyHtml;
+    }
+
+    function nextRound() {
+      currentRound++;
+      document.getElementById('result-screen').classList.add('hidden');
+      startBettingPhase();
+    }
+
+    function onWindowResize() {
+      camera.aspect = window.innerWidth / window.innerHeight;
+      camera.updateProjectionMatrix();
+      renderer.setSize(window.innerWidth, window.innerHeight);
+    }
+  </script>
+</body>
+</html>
